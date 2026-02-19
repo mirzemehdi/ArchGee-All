@@ -297,19 +297,19 @@ See `AIGuidelines/scraper_guidelines.md` for the full scraper contract.
 - [x] AI category/salary/remote/seniority detection
 - [x] Public REST API (jobs, categories)
 - [x] Meilisearch integration via Scout
-- [ ] First external source integration (Adzuna)
-- [ ] Basic analytics (views, clicks)
+- [x] First external source integration (Adzuna)
+- [x] Basic analytics (views, clicks)
 
 ### Phase 2
 - [ ] Python scraper microservice
-- [ ] Additional API sources (CareerJet, Jooble)
-- [ ] Job alerts (email notifications)
+- [x] Additional API sources (CareerJet, Jooble, Reed)
+- [x] Job alerts (email notifications)
 - [ ] Salary extraction improvements
 - [ ] Company profiles (auto-generated from job data)
-- [ ] Advanced analytics dashboard
+- [x] Advanced analytics dashboard
 
 ### Phase 3
-- [ ] Mobile app (Flutter)
+- [ ] Mobile app (Kotlin Multiplatform)
 - [ ] AI-powered job recommendations
 - [ ] Resume parsing and matching
 - [ ] Premium job listings (paid)
