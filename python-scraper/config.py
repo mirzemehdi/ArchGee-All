@@ -16,7 +16,7 @@ class Config:
     ADZUNA_APP_KEY: str = os.getenv("ADZUNA_APP_KEY", "")
 
     # CareerJet
-    CAREERJET_AFFID: str = os.getenv("CAREERJET_AFFID", "")
+    CAREERJET_API_KEY: str = os.getenv("CAREERJET_API_KEY", "")
 
     # Jooble
     JOOBLE_API_KEY: str = os.getenv("JOOBLE_API_KEY", "")

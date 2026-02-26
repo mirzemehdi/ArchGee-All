@@ -12,17 +12,17 @@ class TestCareerJetAdapter:
     """Test the CareerJet adapter."""
 
     def test_source_name(self):
-        adapter = CareerJetAdapter(affid="test")
+        adapter = CareerJetAdapter(api_key="test")
         assert adapter.source_name == "careerjet"
 
     def test_no_credentials_returns_empty(self):
-        adapter = CareerJetAdapter(affid="")
+        adapter = CareerJetAdapter(api_key="")
         jobs = adapter.fetch_jobs(keywords=["architect"])
         assert jobs == []
 
     @respx.mock
     def test_parse_result(self):
-        adapter = CareerJetAdapter(affid="test")
+        adapter = CareerJetAdapter(api_key="test")
         result = {
             "title": "Senior Architect",
             "description": "Design residential buildings.",
@@ -41,7 +41,7 @@ class TestCareerJetAdapter:
 
     @respx.mock
     def test_parse_result_missing_title_returns_none(self):
-        adapter = CareerJetAdapter(affid="test")
+        adapter = CareerJetAdapter(api_key="test")
         result = {
             "title": "",
             "description": "Test",
@@ -51,7 +51,7 @@ class TestCareerJetAdapter:
 
     @respx.mock
     def test_parse_result_missing_description_returns_none(self):
-        adapter = CareerJetAdapter(affid="test")
+        adapter = CareerJetAdapter(api_key="test")
         result = {
             "title": "Architect",
             "description": "",
@@ -73,11 +73,11 @@ class TestCareerJetAdapter:
             ],
         }
 
-        respx.get("http://public.api.careerjet.net/search").mock(
+        respx.get("https://search.api.careerjet.net/v4/query").mock(
             return_value=httpx.Response(200, json=response_data)
         )
 
-        adapter = CareerJetAdapter(affid="test_affid")
+        adapter = CareerJetAdapter(api_key="test_key")
         jobs = adapter.fetch_jobs(keywords=["architect"], max_results=10)
 
         assert len(jobs) == 1
@@ -85,11 +85,11 @@ class TestCareerJetAdapter:
 
     @respx.mock
     def test_fetch_handles_error_gracefully(self):
-        respx.get("http://public.api.careerjet.net/search").mock(
+        respx.get("https://search.api.careerjet.net/v4/query").mock(
             return_value=httpx.Response(500, text="Server Error")
         )
 
-        adapter = CareerJetAdapter(affid="test_affid")
+        adapter = CareerJetAdapter(api_key="test_key")
         jobs = adapter.fetch_jobs(keywords=["architect"])
         assert jobs == []
 

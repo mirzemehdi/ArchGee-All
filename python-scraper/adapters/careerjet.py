@@ -1,9 +1,11 @@
 """CareerJet API adapter for fetching architecture jobs.
 
-CareerJet provides an affiliate API. This is a placeholder adapter
-that will be completed when CareerJet API credentials are available.
+CareerJet provides a search API authenticated via Basic HTTP auth.
+Docs: https://www.careerjet.com/partners/api/
 """
 
+import socket
+import time
 from typing import List, Optional
 
 import httpx
@@ -16,19 +18,27 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+MAX_PAGE = 10
+MAX_PAGE_SIZE = 100
+REQUEST_DELAY_SECONDS = 0.5
+
 
 class CareerJetAdapter(BaseAdapter):
     """Fetches architecture jobs from the CareerJet API.
 
-    CareerJet provides a job search API accessible via affiliate ID.
+    CareerJet provides a job search API authenticated via Basic HTTP auth
+    using the API key as the username and an empty password.
     Docs: https://www.careerjet.com/partners/api/
     """
 
-    BASE_URL = "http://public.api.careerjet.net/search"
+    BASE_URL = "https://search.api.careerjet.net/v4/query"
 
-    def __init__(self, affid: Optional[str] = None):
-        self.affid = affid or config.CAREERJET_AFFID
-        self.client = httpx.Client(timeout=30.0)
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or config.CAREERJET_API_KEY
+        self.client = httpx.Client(
+            timeout=30.0,
+            auth=(self.api_key, "") if self.api_key else None,
+        )
 
     @property
     def source_name(self) -> str:
@@ -41,8 +51,8 @@ class CareerJetAdapter(BaseAdapter):
         max_results: int = 100,
     ) -> List[ScrapedJob]:
         """Fetch jobs from CareerJet API."""
-        if not self.affid:
-            logger.warning("[careerjet] No affiliate ID configured, skipping.")
+        if not self.api_key:
+            logger.warning("[careerjet] No API key configured, skipping.")
             return []
 
         self._log_fetch_start(keywords, location)
@@ -50,9 +60,9 @@ class CareerJetAdapter(BaseAdapter):
         all_jobs: List[ScrapedJob] = []
         query = " ".join(keywords)
         page = 1
-        per_page = min(99, max_results)
+        per_page = min(MAX_PAGE_SIZE, max_results)
 
-        while len(all_jobs) < max_results:
+        while len(all_jobs) < max_results and page <= MAX_PAGE:
             try:
                 results = self._fetch_page(query, location, page, per_page)
 
@@ -68,6 +78,7 @@ class CareerJetAdapter(BaseAdapter):
                     break
 
                 page += 1
+                time.sleep(REQUEST_DELAY_SECONDS)
 
             except Exception as e:
                 self._log_fetch_error(e)
@@ -86,14 +97,12 @@ class CareerJetAdapter(BaseAdapter):
     ) -> List[dict]:
         """Fetch a single page of results from CareerJet."""
         params = {
-            "affid": self.affid,
             "keywords": query,
             "page": page,
-            "pagesize": per_page,
+            "page_size": per_page,
             "sort": "date",
-            "user_ip": "0.0.0.0",
-            "user_agent": "ArchGee Job Scraper/1.0",
-            "url": "https://archgee.com",
+            "user_ip": self._get_server_ip(),
+            "user_agent": "ArchGee Job Scraper/1.0 (https://archgee.com)",
             "locale_code": "en_GB",
         }
 
@@ -130,6 +139,14 @@ class CareerJetAdapter(BaseAdapter):
         except Exception as e:
             logger.warning(f"[careerjet] Failed to parse result: {e}")
             return None
+
+    @staticmethod
+    def _get_server_ip() -> str:
+        """Get the server's outbound IP address."""
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            return "127.0.0.1"
 
     def __del__(self):
         try:

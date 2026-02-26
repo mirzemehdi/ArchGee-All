@@ -80,8 +80,8 @@ php artisan jobs:fetch-reed --location=London --distance=25
 | | |
 |---|---|
 | **Status** | Integrated |
-| **API Docs** | https://www.careerjet.net/partners/ |
-| **Auth** | Affiliate ID |
+| **API Docs** | https://www.careerjet.com/partners/api |
+| **Auth** | API Key (Basic HTTP auth — key as username, empty password) |
 | **Rate Limits** | 1,000 requests/hour (can be increased) |
 | **Coverage** | 16 locales (en_GB, en_US, en_AU, en_CA, de_DE, fr_FR, en_NZ, en_SG, en_ZA, en_AE, en_IN, nl_NL, it_IT, pl_PL, en_IE, en_HK) |
 | **Arch Coverage** | Moderate — aggregates from many sources globally |
@@ -90,10 +90,10 @@ php artisan jobs:fetch-reed --location=London --distance=25
 
 **Setup:**
 ```env
-CAREERJET_AFFILIATE_ID=your_affiliate_id
+CAREERJET_API_KEY=your_api_key
 ```
 
-**Get credentials:** Register as a partner at https://www.careerjet.net/partners/
+**Get credentials:** Register as a partner at https://www.careerjet.com/partners/api
 
 **Important:** Careerjet operates on an affiliate model. Job URLs returned are tracking URLs. Users clicking through generate revenue. **You must use the provided URLs as-is** (no redirecting or rewriting).
 
@@ -253,8 +253,8 @@ ADZUNA_APP_KEY=
 # Reed.co.uk (UK)
 REED_API_KEY=
 
-# Careerjet (16 locales, affiliate model)
-CAREERJET_AFFILIATE_ID=
+# Careerjet (16 locales, API key with Basic auth)
+CAREERJET_API_KEY=
 
 # Jooble (13 countries)
 JOOBLE_API_KEY=
