@@ -32,7 +32,7 @@ ArchGee-All/                          # Root (git repo)
 | **Framework** | Laravel 12, PHP 8.2+ |
 | **Frontend** | TALL stack — Tailwind CSS 4, Alpine.js, Livewire 4, DaisyUI 5 |
 | **Admin** | Filament 5 (two panels: `/admin` + `/dashboard`) |
-| **Database** | MySQL 8.0 (via Docker/Sail) |
+| **Database** | MySQL 8.4 (prod Docker) / MySQL 8.0 (dev Sail) |
 | **Cache/Queue** | Redis, Laravel Horizon |
 | **Search** | Meilisearch via Laravel Scout (optional, falls back to MySQL LIKE) |
 | **Auth** | Laravel Sanctum, Socialite, Filament Breezy |
@@ -74,6 +74,81 @@ vendor/bin/pint                                  # Code formatter (PSR-12)
 # Python scraper (from python-scraper/)
 python main.py --all                             # Fetch all sources
 python main.py --source adzuna --country gb,us   # Specific source/country
+```
+
+## Deployment (Production — Docker + Dokploy)
+
+**No deploy.php / Deployer is used.** Production runs on Docker Compose via Dokploy on VPS.
+
+### Architecture
+
+```
+Dokploy (VPS)
+  └─ Traefik (TLS termination, routing)
+      └─ docker-compose.prod.yml
+          ├── app          — FrankenPHP 1.4 (PHP 8.3, Caddy) — web server
+          ├── horizon      — Laravel Horizon queue worker
+          ├── scheduler    — php artisan schedule:work
+          ├── mysql        — MySQL 8.4 (internal only, no host ports)
+          ├── redis        — Redis 7 (internal only, password auth)
+          └── meilisearch  — Meilisearch v1.12 (internal only)
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `docker-compose.prod.yml` | Production orchestration (Dokploy-ready) |
+| `Dockerfile` | Multi-stage build: Composer → Node/Vite → FrankenPHP runtime |
+| `docker/production/entrypoint.sh` | Startup: permissions, caching, migrations, sitemap |
+| `docker/production/Caddyfile` | Caddy config + SEO file rewrites |
+| `docker/production/php.ini` | OPcache, memory limits, upload limits |
+| `.dockerignore` | Excludes dev files from production image |
+
+### How Deployment Works
+
+1. Dokploy pulls code from git, builds Docker images via `Dockerfile`
+2. Multi-stage build: Composer install → npm build → FrankenPHP runtime
+3. `entrypoint.sh` runs on each container start (role-based via `CONTAINER_ROLE`):
+   - **All roles**: `config:cache`, `route:cache`, `storage:link`, fix permissions
+   - **App role only**: `migrate --force`, `db:seed`, create admin user, `app:export-configs`, `app:generate-sitemap --force`
+4. CMD hands off to: `frankenphp run` (app), `artisan horizon` (horizon), `artisan schedule:work` (scheduler)
+
+### Shared Storage (Docker Volume)
+
+All three app containers share `app-storage:/app/storage/app/public` volume. This is critical for:
+- **Sitemap/robots.txt**: Generated files are written to `storage/app/public/` (shared volume), then served via Caddy rewrites (`/sitemap.xml` → `/storage/sitemap.xml`)
+- **User uploads**: Accessible via `storage:link` symlink (`public/storage/` → `storage/app/public/`)
+
+### Permissions (Docker)
+
+- Entrypoint runs `chown -R www-data:www-data storage/ bootstrap/cache/` + `chmod 775`
+- FrankenPHP handles privilege management internally
+- `storage/` and `bootstrap/cache/` must be writable by `www-data`
+- The shared Docker volume preserves ownership across container restarts
+
+### Security Notes
+
+- MySQL/Redis/Meilisearch have **no host port bindings** — only reachable within Docker network
+- Redis supports password auth via `REDIS_PASSWORD` env var (recommended for production)
+- `DB_ROOT_PASSWORD` can be set separately from `DB_PASSWORD`
+- `SERVER_NAME=:80` for Dokploy (TLS handled by Traefik upstream)
+- `.env` file is never baked into the Docker image (listed in `.dockerignore`)
+
+### Production Deploy Checklist
+
+```bash
+# On VPS (one-time setup)
+# 1. Set up Dokploy, point it to git repo
+# 2. Configure .env with production values in Dokploy
+# 3. Ensure ADMIN_EMAIL, ADMIN_PASSWORD are set for first deploy
+# 4. Set REDIS_PASSWORD to a strong value
+# 5. Set DB_ROOT_PASSWORD separately from DB_PASSWORD
+
+# Manual commands (if needed)
+docker compose -f docker-compose.prod.yml exec app php artisan app:generate-sitemap --force
+docker compose -f docker-compose.prod.yml exec app php artisan migrate:status
+docker compose -f docker-compose.prod.yml logs -f horizon
 ```
 
 ## Key URLs (Development)
@@ -277,8 +352,8 @@ These are critical — Filament 5 changed several property declarations from sta
 - `jobLocationType`: "TELECOMMUTE" for remote jobs only
 - `directApply`: always `false` (external links)
 - **URL structure**: `/jobs/{slug}` (format: `{title}-{company}-{city}-{short-id}`)
-- **Sitemap**: `spatie/laravel-sitemap`, split if >1000 jobs
-- **robots.txt**: Disallow /admin, /dashboard, /api, /checkout, /horizon, /telescope
+- **Sitemap**: `spatie/laravel-sitemap` — includes static routes, jobs, categories, locations (country/city), blog posts, blog categories. In Docker: writes to `storage/app/public/` (shared volume), served via Caddy rewrite `/sitemap.xml` → `/storage/sitemap.xml`
+- **robots.txt**: Generated alongside sitemap. Disallows /admin, /dashboard, /api, /checkout, /horizon, /telescope. In Docker: same shared volume + Caddy rewrite pattern
 
 ## UI Design System
 
