@@ -11,6 +11,11 @@
 ```
 ArchGee-All/                          # Root (git repo)
 ├── ArchGee-Website/                  # Laravel 12 app (also its own git repo)
+├── ArchGee-MobileApp/                # Kotlin Multiplatform mobile app (Android + iOS)
+│   ├── composeApp/                   # Main shared app module (Compose Multiplatform)
+│   ├── designsystem/                 # Reusable UI component library (40+ composables)
+│   ├── iosApp/                       # Xcode wrapper for iOS
+│   └── distribution/                 # Release assets (keystore, release notes)
 ├── python-scraper/                   # Python 3.12+ job scraper
 ├── AIGuidelines/                     # Product & technical documentation
 │   ├── prd.md                        # Product Requirements Document
@@ -21,6 +26,7 @@ ArchGee-All/                          # Root (git repo)
 │   ├── seo_guidelines.md             # SEO & Google Jobs schema
 │   ├── job_sources_guideline.md      # Job source APIs & compliance
 │   ├── ui_verification.md            # UI design system & components
+│   ├── mobile_app_guidelines.md      # Mobile app architecture & integration
 │   └── SETUP_GUIDE.md               # Developer setup guide
 └── Assets/                           # Brand assets (logos, images)
 ```
@@ -39,6 +45,7 @@ ArchGee-All/                          # Root (git repo)
 | **AI** | OpenAI (gpt-4o-mini) / Anthropic / Mistral for job enrichment |
 | **Assets** | Vite 7 |
 | **Scraper** | Python 3.12+, httpx, Pydantic, Click CLI |
+| **Mobile App** | Kotlin Multiplatform, Compose Multiplatform, Ktor, Koin, Room |
 | **Boilerplate** | SaaSykit (subscriptions, payments, blog, roadmap) |
 
 ## Development Commands
@@ -301,6 +308,40 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Schedule**: Every 6 hours (`python main.py --all`)
 - **Config**: `.env` with `ARCHGEE_API_URL`, `ARCHGEE_API_TOKEN`, source API keys
 
+## Mobile App (ArchGee-MobileApp/)
+
+> Full details in `AIGuidelines/mobile_app_guidelines.md`
+
+- **Stack**: Kotlin Multiplatform + Compose Multiplatform (Android + iOS)
+- **Architecture**: Clean Architecture (Presentation → Domain → Data) with MVVM per screen
+- **DI**: Koin 4.x
+- **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints)
+- **Database**: Room (cross-platform via BundledSQLiteDriver)
+- **Auth**: Firebase Auth (anonymous + Google OAuth) — needs Sanctum bridge for Laravel API
+- **Monetization**: RevenueCat (free tier: 4 swipes/day, premium: unlimited)
+- **Navigation**: Jetpack Navigation Compose with `@Serializable` type-safe routes
+- **Design System**: Separate `designsystem/` module with 40+ reusable composables
+- **Package**: `com.measify.archgee` (layers: `presentation/`, `domain/`, `data/`, `util/`)
+
+### Key Conventions (Kotlin/KMP)
+
+- **MVVM pattern**: `ScreenRoute` + `UiStateHolder` + `StateFlow<UiState>` + sealed `UiEvent`
+- **Domain models**: Pure `data class`, no serialization annotations, no platform types
+- **Repositories**: Concrete classes (no interfaces unless needed), wrap results in `Result<T>`
+- **API services**: Return raw types (no `Result`), let exceptions propagate to repositories
+- **Response DTOs**: Must have `Response` suffix, include `asDomain()` mapping method
+- **Request DTOs**: Must have `Request` suffix, use `@Serializable` + `@SerialName`
+- **Coroutines**: Inject dispatchers, use `BackgroundExecutor` for IO, avoid `GlobalScope`
+- **No pass-through use cases**: Call repositories directly from ViewModels unless orchestration needed
+
+### Build Commands
+
+```bash
+./gradlew :composeApp:assembleDebug          # Android debug APK
+./gradlew :composeApp:testDebugUnitTest      # Shared unit tests
+# iOS: Build via Xcode only (slow — skip during routine validation)
+```
+
 ## Coding Standards
 
 ### PHP / Laravel
@@ -472,4 +513,5 @@ Don't use `recaptchaApiJsScriptTag()` / `recaptchaApiChallengeTag()` in Livewire
 
 - **Coding guidelines**: `ArchGee-Website/ai/laravel-php-ai-guidelines.md`
 - **Boilerplate docs**: `ArchGee-Website/AGENTS.md` (SaaSykit original)
-- **All guideline docs**: `AIGuidelines/` directory (PRD, schema, API, AI prompts, SEO, UI, sources)
+- **All guideline docs**: `AIGuidelines/` directory (PRD, schema, API, AI prompts, SEO, UI, sources, mobile app)
+- **Mobile app guidelines**: `AIGuidelines/mobile_app_guidelines.md` (architecture, API integration, conventions)
