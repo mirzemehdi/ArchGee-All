@@ -151,6 +151,7 @@ All three app containers share `app-storage:/app/storage/app/public` volume. Thi
 # 3. Ensure ADMIN_EMAIL, ADMIN_PASSWORD are set for first deploy
 # 4. Set REDIS_PASSWORD to a strong value
 # 5. Set DB_ROOT_PASSWORD separately from DB_PASSWORD
+# 6. Set MOBILE_API_KEY to a strong random value (used by mobile app X-Api-Key header)
 
 # Manual commands (if needed)
 docker compose -f docker-compose.prod.yml exec app php artisan app:generate-sitemap --force
@@ -202,6 +203,7 @@ Sources (APIs, scrapers, manual form)
 | `JobAlert` | User alert subscriptions (filters JSON, frequency) |
 | `SavedJob` | User bookmarks (pivot: user_id + job_id) |
 | `JobApplicationClick` | Apply button click tracking |
+| `AIGeneration` | AI tool generation tracking (UUID PK, Replicate prediction ID, status, input/output images) |
 
 ### ArchGee-Specific Services (app/Services/)
 
@@ -215,6 +217,9 @@ Sources (APIs, scrapers, manual form)
 | `CareerjetFetchService` | Careerjet API (16 locales, Basic auth) |
 | `JoobleFetchService` | Jooble API (13 countries) |
 | `PostHogAnalyticsService` | Event analytics tracking |
+| `ToolRegistry` | Singleton — auto-discovers `BaseTool` subclasses in `app/AI/Tools/` |
+| `ReplicateService` | Replicate API client (start prediction, poll, download output) |
+| `GenerationService` | Orchestrates AI tool generations (create, rate limit, history) |
 
 ### Enums (app/Constants/)
 
@@ -227,11 +232,13 @@ Sources (APIs, scrapers, manual form)
 | `SalaryPeriod` | HOUR, DAY, MONTH, YEAR |
 | `JobSourceType` | API, MANUAL |
 | `AlertFrequency` | DAILY, WEEKLY |
+| `GenerationStatus` | QUEUED, RUNNING, COMPLETED, FAILED |
 
 ### Queue Jobs (app/Jobs/)
 
 - `EnrichJobWithAi` — Async AI enrichment (queue: `ai-enrichment`, 3 retries, 30s backoff). Auto-approves API-imported jobs passing relevance check.
 - `SendJobAlerts` — Match jobs to alert filters and send emails.
+- `RunAIToolJob` — Execute AI tool generation via Replicate API (queue: `ai-tools`, 2 retries, 360s timeout).
 
 ### Console Commands (app/Console/Commands/)
 
@@ -250,7 +257,9 @@ POST /api/ingest/jobs      # Bulk ingest (max 100)
 GET  /api/ingest/sources   # List available sources
 ```
 
-### Public REST API v1 (60 req/min)
+### Public REST API v1 (60 req/min, API key required)
+
+Protected by `VerifyApiKey` middleware — requires `X-Api-Key` header matching `MOBILE_API_KEY` env var. Returns 401 JSON if missing/invalid.
 
 ```
 GET  /api/v1/jobs              # List published jobs (filters: q, category, location, country, remote, seniority, employment_type, salary_min/max, sort)
@@ -271,9 +280,21 @@ PUT    /api/v1/alerts/{id}         # Update alert
 DELETE /api/v1/alerts/{id}         # Delete alert
 ```
 
+### AI Tools API (API key required)
+
+```
+GET  /api/v1/tools                   # List all tools metadata
+GET  /api/v1/tools/{slug}            # Single tool detail
+POST /api/v1/tools/{slug}/generate   # Start generation (returns 202)
+GET  /api/v1/generations/{id}        # Poll generation status/result
+GET  /api/v1/generations             # User's generation history (auth:sanctum)
+```
+
 ### Web Routes
 
 ```
+GET  /tools                          # AI Tools gallery
+GET  /tools/{slug}                   # Tool landing page + Livewire form
 GET  /jobs                           # Job listing with filters
 GET  /jobs/post                      # Public submission form
 GET  /jobs/category/{slug}           # Category landing (pSEO)
@@ -315,8 +336,9 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Stack**: Kotlin Multiplatform + Compose Multiplatform (Android + iOS)
 - **Architecture**: Clean Architecture (Presentation → Domain → Data) with MVVM per screen
 - **DI**: Koin 4.x
-- **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints)
-- **Database**: Room (cross-platform via BundledSQLiteDriver)
+- **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints with `X-Api-Key` header)
+- **API Config**: `BuildConfig.ARCHGEE_API_BASE_URL` + `BuildConfig.ARCHGEE_API_KEY` (set in `local.properties`)
+- **Database**: Room (cross-platform via BundledSQLiteDriver, current version: 4, destructive migration)
 - **Auth**: Firebase Auth (anonymous + Google OAuth) — needs Sanctum bridge for Laravel API
 - **Monetization**: RevenueCat (free tier: 4 swipes/day, premium: unlimited)
 - **Navigation**: Jetpack Navigation Compose with `@Serializable` type-safe routes
@@ -329,7 +351,7 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Domain models**: Pure `data class`, no serialization annotations, no platform types
 - **Repositories**: Concrete classes (no interfaces unless needed), wrap results in `Result<T>`
 - **API services**: Return raw types (no `Result`), let exceptions propagate to repositories
-- **Response DTOs**: Must have `Response` suffix, include `asDomain()` mapping method
+- **Response DTOs**: Must have `Dto`/`Response` suffix, include `toDomain()` mapping method
 - **Request DTOs**: Must have `Request` suffix, use `@Serializable` + `@SerialName`
 - **Coroutines**: Inject dispatchers, use `BackgroundExecutor` for IO, avoid `GlobalScope`
 - **No pass-through use cases**: Call repositories directly from ViewModels unless orchestration needed
@@ -434,6 +456,52 @@ These are critical — Filament 5 changed several property declarations from sta
 - `description_html` sanitized via `mews/purifier`
 - Salary normalized to annual integers (`salary_min`/`salary_max`)
 - Key indexes: `status+posted_at`, `job_category_id`, `remote_type`, `seniority_level`, `country+city`, `source_job_id`, full-text on `title+description`
+
+## AI Tools System
+
+Modular system for AI-powered design tools (interior redesign, sketch-to-render, etc.) using Replicate API.
+
+### Architecture
+
+```
+User → POST /api/v1/tools/{slug}/generate (or Livewire submit)
+  → GenerationService.create() → AIGeneration (QUEUED) → dispatch RunAIToolJob
+  → Queue worker: RunAIToolJob
+    → ToolRegistry.findOrFail(slug) → BaseTool config
+    → ReplicateService.startPrediction() → poll → download output
+    → AIGeneration (COMPLETED)
+  → User polls: GET /api/v1/generations/{id} or wire:poll.3s
+```
+
+### Tool Abstraction (`app/AI/Tools/`)
+
+- `BaseTool` — abstract class: `slug()`, `name()`, `description()`, `tagline()`, `ctaLabel()`, `steps()`, `icon()`, `replicateModel()`, `inputSchema()`, `buildReplicatePayload()`, `extractOutputUrl()`
+- `InteriorDesignerTool` — room photo → redesigned space (Replicate model: `adirik/interior-design`)
+- `SketchToDesignTool` — sketch → photorealistic render (configurable default model)
+- `ToolRegistry` — singleton, auto-discovers tools by scanning `app/AI/Tools/` for `BaseTool` subclasses
+
+### Adding a New Tool (3 files)
+
+1. `app/AI/Tools/NewTool.php` — extends `BaseTool` (slug, name, inputs, Replicate model, payload builder)
+2. `app/Livewire/Tools/NewTool.php` — extends `BaseToolComponent` (properties, `getTool()`, `collectInputs()`)
+3. `resources/views/livewire/tools/new-tool.blade.php` — tool-specific form UI
+
+Everything else (gallery, API endpoints, queue job, admin panel, status polling) works automatically.
+
+### Replicate Config
+
+```env
+REPLICATE_API_KEY=r8_...
+REPLICATE_DEFAULT_MODEL=owner/model:version
+REPLICATE_POLL_TIMEOUT=300
+REPLICATE_FREE_DAILY_LIMIT=3
+```
+
+### UI Design Pattern (Tool Pages)
+
+- **Landing page** (`tools/show.blade.php`): stone/neutral palette, centered hero with tagline + CTA, "how it works" 3-step section, Alpine.js staggered fade-in animations
+- **Livewire forms**: 4 states (form → loading → error → result), stone-* neutral colors, `rounded-full` buttons, Alpine.js `x-transition` on state changes
+- **Gallery** (`tools/index.blade.php`): dark hero, 3-column card grid with hover-lift animations
 
 ## AI Enrichment Config
 

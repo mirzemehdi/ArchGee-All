@@ -104,7 +104,25 @@ The platform works without an AI key. Jobs will be ingested but won't be auto-cl
 
 ---
 
-## 6. Configure Search (Optional)
+## 6. Configure AI Design Tools (Optional)
+
+The AI Tools system (interior redesign, sketch-to-render) uses the Replicate API.
+
+1. Get an API key from https://replicate.com/account/api-tokens
+2. Edit `.env`:
+
+```env
+REPLICATE_API_KEY=r8_your-key-here
+REPLICATE_DEFAULT_MODEL=owner/model:version
+REPLICATE_POLL_TIMEOUT=300
+REPLICATE_FREE_DAILY_LIMIT=3
+```
+
+Without a Replicate key, the `/tools` gallery page works but generations will fail.
+
+---
+
+## 7. Configure Search (Optional)
 
 By default, search uses the **database driver** (MySQL LIKE queries). For better search, configure Meilisearch:
 
@@ -149,7 +167,7 @@ Import existing jobs:
 
 ---
 
-## 7. Create a Scraper API Token
+## 8. Create a Scraper API Token
 
 To allow external scrapers to ingest jobs:
 
@@ -170,7 +188,7 @@ Authorization: Bearer YOUR_TOKEN_HERE
 
 ---
 
-## 8. Key URLs
+## 9. Key URLs
 
 | Page | URL |
 |------|-----|
@@ -181,11 +199,12 @@ Authorization: Bearer YOUR_TOKEN_HERE
 | User Dashboard | http://localhost:8080/dashboard |
 | Horizon (Queues) | http://localhost:8080/horizon |
 | Telescope (Debug) | http://localhost:8080/telescope |
+| AI Tools | http://localhost:8080/tools |
 | Mailpit (Emails) | http://localhost:8025 |
 
 ---
 
-## 9. Running Tests
+## 10. Running Tests
 
 ```bash
 # Run all tests
@@ -202,7 +221,7 @@ Authorization: Bearer YOUR_TOKEN_HERE
 
 ---
 
-## 10. Queue Processing
+## 11. Queue Processing
 
 For the AI enrichment pipeline and other background tasks:
 
@@ -222,7 +241,7 @@ QUEUE_CONNECTION=redis
 
 ---
 
-## 11. Scheduled Tasks
+## 12. Scheduled Tasks
 
 The app has a scheduled command to expire old jobs:
 
@@ -236,7 +255,7 @@ The app has a scheduled command to expire old jobs:
 
 ---
 
-## 12. API Endpoints Quick Reference
+## 13. API Endpoints Quick Reference
 
 ### Public (no auth)
 - `GET /api/v1/jobs` — List jobs with filters
@@ -248,6 +267,11 @@ The app has a scheduled command to expire old jobs:
 - `GET /api/v1/saved-jobs` — List saved jobs
 - `POST /api/v1/saved-jobs` — Save a job
 - `DELETE /api/v1/saved-jobs/{jobId}` — Unsave
+
+### AI Tools (API key)
+- `GET /api/v1/tools` — List all tools
+- `POST /api/v1/tools/{slug}/generate` — Start generation
+- `GET /api/v1/generations/{id}` — Poll status/result
 
 ### Scraper Ingest (Sanctum token)
 - `POST /api/ingest/job` — Single job
