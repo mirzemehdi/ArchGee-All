@@ -152,6 +152,8 @@ All three app containers share `app-storage:/app/storage/app/public` volume. Thi
 # 4. Set REDIS_PASSWORD to a strong value
 # 5. Set DB_ROOT_PASSWORD separately from DB_PASSWORD
 # 6. Set MOBILE_API_KEY to a strong random value (used by mobile app X-Api-Key header)
+# 7. Set FIREBASE_PROJECT_ID to your Firebase project ID (for mobile auth token verification)
+# 8. Set REVENUECAT_API_KEY (secret sk_...) + REVENUECAT_PROJECT_ID (for mobile credit purchases)
 
 # Manual commands (if needed)
 docker compose -f docker-compose.prod.yml exec app php artisan app:generate-sitemap --force
@@ -268,9 +270,16 @@ POST /api/v1/jobs/submit       # Public submission (reCAPTCHA)
 GET  /api/v1/categories        # Categories with job counts
 ```
 
+### Auth API (API key required, no Sanctum)
+
+```
+POST /api/v1/auth/firebase     # Exchange Firebase ID token for Sanctum token (creates/finds user)
+```
+
 ### Authenticated Endpoints (Sanctum)
 
 ```
+POST   /api/v1/auth/logout         # Revoke current Sanctum token
 GET    /api/v1/saved-jobs          # User's saved jobs
 POST   /api/v1/saved-jobs          # Save a job
 DELETE /api/v1/saved-jobs/{jobId}  # Unsave
@@ -339,8 +348,8 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints with `X-Api-Key` header)
 - **API Config**: `BuildConfig.ARCHGEE_API_BASE_URL` + `BuildConfig.ARCHGEE_API_KEY` (set in `local.properties`)
 - **Database**: Room (cross-platform via BundledSQLiteDriver, current version: 4, destructive migration)
-- **Auth**: Firebase Auth (anonymous + Google OAuth) — needs Sanctum bridge for Laravel API
-- **Monetization**: RevenueCat (free tier: 4 swipes/day, premium: unlimited)
+- **Auth**: Firebase Auth (anonymous + Google/Apple OAuth) → Sanctum bridge via `POST /api/v1/auth/firebase`
+- **Monetization**: RevenueCat (subscriptions: free 4 swipes/day, premium unlimited; credits: consumable IAP for AI tools)
 - **Navigation**: Jetpack Navigation Compose with `@Serializable` type-safe routes
 - **Design System**: Separate `designsystem/` module with 40+ reusable composables
 - **Package**: `com.measify.archgee` (layers: `presentation/`, `domain/`, `data/`, `util/`)
