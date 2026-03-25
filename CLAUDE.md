@@ -187,6 +187,16 @@ Sources (APIs, scrapers, manual form)
     → Published (Meilisearch index, public API, web)
 ```
 
+### Geo-Based Job Prioritization
+
+Jobs are sorted with the user's detected country first, then remote jobs, then everything else — on both web (`/jobs`) and API (`/api/v1/jobs`). No filtering — all jobs still shown.
+
+- **Detection**: `GeoLocationService` checks Cloudflare `CF-IPCountry` header first, falls back to `ip-api.com` free API. Cached per IP for 24h.
+- **Scope**: `Job::scopeCountryFirst(?string $countryCode)` adds `ORDER BY CASE WHEN country = ? THEN 0 WHEN remote_type = 'remote' THEN 1 ELSE 2 END` before featured/posted_at ordering.
+- **Applied in**: `JobService::getPublishedJobs()` (via `$countryPriority` param), `JobsController::index()`, `Api\V1\JobController::index()`, homepage route.
+- **Fallback**: localhost/unknown IP → `null` → no prioritization, normal order.
+- **Privacy**: Disclosed in privacy policy under "IP-Based Location Detection" section.
+
 ### User Roles
 
 - **Admin**: Filament panel, moderate jobs, manage sources/categories
@@ -218,6 +228,7 @@ Sources (APIs, scrapers, manual form)
 | `AdzunaFetchService` | Adzuna API (16 countries) |
 | `CareerjetFetchService` | Careerjet API (16 locales, Basic auth) |
 | `JoobleFetchService` | Jooble API (13 countries) |
+| `GeoLocationService` | IP → country detection (CF-IPCountry header + ip-api.com fallback, cached 24h) |
 | `PostHogAnalyticsService` | Event analytics tracking |
 | `ToolRegistry` | Singleton — auto-discovers `BaseTool` subclasses in `app/AI/Tools/` |
 | `ReplicateService` | Replicate API client (start prediction, poll, download output) |
@@ -424,8 +435,24 @@ These are critical — Filament 5 changed several property declarations from sta
 - `jobLocationType`: "TELECOMMUTE" for remote jobs only
 - `directApply`: always `false` (external links)
 - **URL structure**: `/jobs/{slug}` (format: `{title}-{company}-{city}-{short-id}`)
-- **Sitemap**: `spatie/laravel-sitemap` — includes static routes, jobs, categories, locations (country/city), blog posts, blog categories. In Docker: writes to `storage/app/public/` (shared volume), served via Caddy rewrite `/sitemap.xml` → `/storage/sitemap.xml`
-- **robots.txt**: Generated alongside sitemap. Disallows /admin, /dashboard, /api, /checkout, /horizon, /telescope. In Docker: same shared volume + Caddy rewrite pattern
+- **Sitemap**: `spatie/laravel-sitemap` — includes static routes, jobs, categories, locations (country/city), blog posts, blog categories, AI tools. In Docker: writes to `storage/app/public/` (shared volume), served via Caddy rewrite `/sitemap.xml` → `/storage/sitemap.xml`
+- **robots.txt**: Generated alongside sitemap. Disallows /admin, /dashboard, /api, /checkout, /horizon, /telescope. Includes AI crawler rules (GPTBot, ClaudeBot, PerplexityBot, GoogleOther). In Docker: same shared volume + Caddy rewrite pattern
+
+### GEO — AI Search Visibility (Generative Engine Optimization)
+
+- **`/llms.txt`**: Machine-readable site description for AI crawlers (follows [llmstxt.org](https://llmstxt.org/) spec). Route in `web.php`, template at `resources/views/seo/llms-txt.blade.php`. Lists categories, tools, core pages.
+- **AI crawler rules**: robots.txt explicitly allows GPTBot, ClaudeBot, PerplexityBot, GoogleOther
+- **FAQ schema**: `FAQPage` JSON-LD on homepage, category pSEO pages, country pSEO pages, and AI tool detail pages — provides citation hooks for AI search engines
+- **Organization schema**: `Organization` JSON-LD on homepage for entity identity in Knowledge Graph
+- **Tool schemas**: `SoftwareApplication` + `BreadcrumbList` + `FAQPage` on each tool detail page
+
+### pSEO (Programmatic SEO)
+
+- **Category pages**: `/jobs/category/{slug}` — FAQ schema, `seo_content` column for unique intro (editable in Filament admin), top countries cross-links
+- **Country pages**: `/jobs/location/{country}` — FAQ schema, city chips, other-countries sidebar
+- **City pages**: `/jobs/location/{country}/{city}` — breadcrumbs linking to country page
+- **Country map**: 28 supported countries hardcoded in `JobsController::resolveCountryName()` — used for pSEO routing and display names
+- **`seo_content`**: Nullable text column on `job_categories` table — admin-editable unique content per category to avoid thin pages
 
 ## UI Design System
 
