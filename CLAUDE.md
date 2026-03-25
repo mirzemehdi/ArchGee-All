@@ -613,6 +613,43 @@ Don't use `recaptchaApiJsScriptTag()` / `recaptchaApiChallengeTag()` in Livewire
 - Add hidden input with `x-on:captcha-success.window="$wire.recaptcha = $event.detail.token"`
 - Load JS API via `@push('tail') {!! htmlScriptTagJsApi() !!} @endpush`
 
+## Security Best Practices
+
+When writing or reviewing code, always follow these security rules:
+
+### Secret Comparison
+- **Always use `hash_equals()`** for comparing secrets (API keys, tokens, hashes) — never `===` or `!==` (timing attack risk)
+
+### Authorization (IDOR Prevention)
+- **Always scope resource lookups by authenticated user ID** — never fetch a resource by ID alone without verifying ownership
+- Use `$request->user()->id` to scope queries, not nullable user parameters that skip checks when null
+
+### Input Validation
+- **Always set `max` length** on all string/text validation rules to prevent payload abuse
+- Sanitize user text before concatenating into AI/LLM prompts — strip control characters: `preg_replace('/[^\p{L}\p{N}\s.,!?\'-]/u', '', $input)`
+- Validate and constrain all query parameters (length, type, allowed values)
+
+### File Uploads
+- **Never store user uploads on `public` disk** — use private disk and serve via signed URLs or auth-gated controllers
+- Always validate MIME type (`mimes:jpeg,png,webp`), file size (`max:10240`), and extension
+
+### API Security
+- Use endpoint-specific rate limits for sensitive operations (`throttle:10,1` for auth, submit, generate)
+- Set Sanctum token expiration (`config/sanctum.php`) — never allow infinite token lifetime
+- Security headers middleware (`SecurityHeaders.php`) is globally registered — do not remove
+
+### External Service Verification
+- **Never return `true` as fallback** when external verification services (RevenueCat, etc.) are unconfigured — always fail closed
+- Validate Replicate output URLs against allowed hostnames before downloading
+
+### Logging
+- Never log attacker-controlled values (forged token payloads, manipulated headers) — log the event type only
+- Never log secrets, API keys, or full stack traces in production
+
+### Configuration
+- `.env.example` defaults to `APP_DEBUG=false` — always keep it that way
+- Ensure `SESSION_SECURE_COOKIE=true` in production
+
 ## Important References
 
 - **Coding guidelines**: `ArchGee-Website/ai/laravel-php-ai-guidelines.md`
