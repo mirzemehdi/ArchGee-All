@@ -11,6 +11,10 @@
 ```
 ArchGee-All/                          # Root (git repo)
 ├── ArchGee-Website/                  # Laravel 12 app (also its own git repo)
+│   ├── blog-content/                 # Blog content system
+│   │   ├── blog-guidelines.md        # Writing rules, tone, SEO, structure
+│   │   ├── blog-topics.json          # 100 SEO topics with status tracking
+│   │   └── posts/{slug}.mdx          # Blog posts (MDX with YAML frontmatter)
 ├── ArchGee-MobileApp/                # Kotlin Multiplatform mobile app (Android + iOS)
 │   ├── composeApp/                   # Main shared app module (Compose Multiplatform)
 │   ├── designsystem/                 # Reusable UI component library (40+ composables)
@@ -118,7 +122,7 @@ Dokploy (VPS)
 2. Multi-stage build: Composer install → npm build → FrankenPHP runtime
 3. `entrypoint.sh` runs on each container start (role-based via `CONTAINER_ROLE`):
    - **All roles**: `config:cache`, `route:cache`, `storage:link`, fix permissions
-   - **App role only**: `migrate --force`, `db:seed`, create admin user, `app:export-configs`, `app:generate-sitemap --force`
+   - **App role only**: `migrate --force`, `db:seed`, create admin user, `app:export-configs`, `blog:import --all`, `app:generate-sitemap --force`
 4. CMD hands off to: `frankenphp run` (app), `artisan horizon` (horizon), `artisan schedule:work` (scheduler)
 
 ### Shared Storage (Docker Volume)
@@ -233,6 +237,7 @@ Jobs are sorted with the user's detected country first, then remote jobs, then e
 | `ToolRegistry` | Singleton — auto-discovers `BaseTool` subclasses in `app/AI/Tools/` |
 | `ReplicateService` | Replicate API client (start prediction, poll, download output) |
 | `GenerationService` | Orchestrates AI tool generations (create, rate limit, history) |
+| `BlogCoverImageService` | Generates 1200x630 PNG cover images for blog posts (Intervention Image v3) |
 
 ### Enums (app/Constants/)
 
@@ -258,6 +263,7 @@ Jobs are sorted with the user's detected country first, then remote jobs, then e
 - `FetchReedJobsCommand`, `FetchAdzunaJobsCommand`, `FetchCareerjetJobsCommand`, `FetchJoobleJobsCommand` — Source fetchers (scheduled every 6hrs)
 - `ExpireOldJobsCommand` — Mark jobs expired after 30 days
 - `SendJobAlertsCommand` — Send matching job alerts
+- `ImportBlogPostCommand` — Import MDX blog posts into DB (`blog:import {slug?} --all --force`)
 - `GenerateSitemap` — XML sitemap with job/category/location pages
 
 ## API Endpoints
@@ -650,9 +656,117 @@ When writing or reviewing code, always follow these security rules:
 - `.env.example` defaults to `APP_DEBUG=false` — always keep it that way
 - Ensure `SESSION_SECURE_COOKIE=true` in production
 
+## Blog Content System
+
+SEO-driven blog for organic traffic growth. Markdown-based writing workflow with Artisan import into the existing SaaSykit blog system.
+
+### Architecture
+
+```
+Write blog post as .mdx file (blog-content/posts/{slug}.mdx)
+  → php artisan blog:import --all (or blog:import {slug})
+  → Parse YAML frontmatter + convert Markdown → HTML
+  → Post-process: wrap tables in .blog-table-wrapper, FAQ in accordion markup
+  → Generate cover image (BlogCoverImageService → 1200x630 PNG)
+  → Create/update BlogPost record in DB
+  → Blog appears at /blog/{slug}
+```
+
+### File Format (`.mdx` with YAML frontmatter)
+
+```markdown
+---
+title: "Architect Salary in London 2026: What to Expect"
+slug: architect-salary-london
+description: "Detailed look at architect salaries in London..."
+category: "Careers & Salaries"
+author: "ArchGee Editorial"
+published_at: "2026-03-26"
+keywords: ["architect salary london", "london architect pay"]
+---
+
+# Heading
+
+Content with **bold**, tables, and internal links to [ArchGee](/jobs).
+
+## FAQ
+
+### Question here?
+
+Answer paragraph here.
+```
+
+### Import Command
+
+```bash
+php artisan blog:import {slug}     # Import single post
+php artisan blog:import --all      # Import all .mdx files (skips existing)
+php artisan blog:import --all --force  # Import all, overwrite existing
+```
+
+- Auto-creates `BlogPostCategory` from frontmatter `category` field
+- Generates cover image via `BlogCoverImageService` (dark bg, orange accents, white title)
+- Attaches cover via Spatie Media Library `blog-images` collection
+- Source `.mdx` files are **kept** after import (not deleted)
+- Runs automatically on deploy via `entrypoint.sh` (skips already-imported posts)
+
+### HTML Post-Processing
+
+The import command post-processes converted HTML:
+- **Tables**: Wrapped in `<div class="blog-table-wrapper">` for responsive scrolling + styled headers
+- **FAQ sections**: `## FAQ` heading + `### Question` items converted to Alpine.js accordion with `x-data`, `x-show`, chevron rotation
+
+### Writing Workflow
+
+1. Check `blog-content/blog-topics.json` for next pending topic
+2. Read `blog-content/blog-guidelines.md` for tone, structure, SEO rules
+3. Write `.mdx` file in `blog-content/posts/{slug}.mdx`
+4. Run `php artisan blog:import --all`
+5. Update topic status to `"published"` in `blog-topics.json`
+
+### Blog Guidelines Summary (`blog-content/blog-guidelines.md`)
+
+- **Tone**: Expert architect/designer, human, slightly opinionated
+- **Length**: 1,200-2,000 words
+- **Structure**: SEO title → hook intro → H2/H3 sections with tables → FAQ → CTA
+- **FAQ**: Every post must include 3-5 FAQs (`## FAQ` → `### Question?` → answer paragraph)
+- **ArchGee mentions**: Max 2-3 per post, natural placements linking to `/jobs`, `/tools`
+- **Quality**: Specific salary figures, real data, no filler, no AI-sounding phrases
+- **Tables**: Use markdown tables for salary data — they get auto-styled on import
+- **Categories**: Careers & Salaries, Location Guides, Remote Work, Career Growth, Industry Insights, Design & Architecture
+
+### Topic Tracker (`blog-content/blog-topics.json`)
+
+- 100 SEO topics with `status: "pending"` or `"published"`
+- Organized by category with `primary_keyword` for each
+- Check this file to find the next topic to write
+
+### Blog Styling
+
+Custom CSS in `resources/css/styles.css` under `article.blog-post`:
+- Dark table headers with rounded wrapper, hover rows
+- Accordion FAQ with Alpine.js (click to expand, chevron rotation)
+- Strong heading hierarchy (orange bottom border on H2s)
+- Cover images generated automatically (no manual image work needed)
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `app/Console/Commands/ImportBlogPostCommand.php` | MDX → DB import with post-processing |
+| `app/Services/BlogCoverImageService.php` | Cover image generation (Intervention Image v3) |
+| `blog-content/blog-guidelines.md` | Writing rules and SEO guidelines |
+| `blog-content/blog-topics.json` | 100 topic tracker with status |
+| `blog-content/posts/*.mdx` | Blog post source files |
+| `resources/css/styles.css` | Blog-specific CSS (tables, FAQ accordion) |
+| `resources/views/components/blog/post.blade.php` | Blog post detail template |
+| `resources/views/components/blog/post-card.blade.php` | Blog listing card template |
+
 ## Important References
 
 - **Coding guidelines**: `ArchGee-Website/ai/laravel-php-ai-guidelines.md`
 - **Boilerplate docs**: `ArchGee-Website/AGENTS.md` (SaaSykit original)
 - **All guideline docs**: `AIGuidelines/` directory (PRD, schema, API, AI prompts, SEO, UI, sources, mobile app)
 - **Mobile app guidelines**: `AIGuidelines/mobile_app_guidelines.md` (architecture, API integration, conventions)
+- **Blog guidelines**: `ArchGee-Website/blog-content/blog-guidelines.md` (writing rules, SEO, tone, structure)
+- **Blog topics**: `ArchGee-Website/blog-content/blog-topics.json` (100 SEO topics with status tracking)
