@@ -158,6 +158,9 @@ All three app containers share `app-storage:/app/storage/app/public` volume. Thi
 # 6. Set MOBILE_API_KEY to a strong random value (used by mobile app X-Api-Key header)
 # 7. Set FIREBASE_PROJECT_ID to your Firebase project ID (for mobile auth token verification)
 # 8. Set REVENUECAT_API_KEY (secret sk_...) + REVENUECAT_PROJECT_ID (for mobile credit purchases)
+# 9. Set CLOUDFLARE_R2_* env vars (access key, secret, bucket, endpoint, public URL)
+# 10. Set TELESCOPE_ENABLED=true to enable Telescope in production
+# 11. Set MEILISEARCH_KEY to a strong random string (min 16 bytes)
 
 # Manual commands (if needed)
 docker compose -f docker-compose.prod.yml exec app php artisan app:generate-sitemap --force
@@ -538,6 +541,23 @@ REPLICATE_DEFAULT_MODEL=owner/model:version
 REPLICATE_POLL_TIMEOUT=300
 REPLICATE_FREE_DAILY_LIMIT=3
 ```
+
+### File Storage (Cloudflare R2)
+
+AI tool inputs and outputs are stored on Cloudflare R2 (S3-compatible), not on local disk. This allows the `app` and `horizon` Docker containers to share files without shared volumes.
+
+```env
+CLOUDFLARE_R2_ACCESS_KEY_ID=...
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=...
+CLOUDFLARE_R2_BUCKET=archgee-ai-tools
+CLOUDFLARE_R2_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+CLOUDFLARE_R2_URL=https://<PUBLIC_URL>   # R2.dev subdomain or custom domain
+```
+
+- **Inputs** (`ai-tools/inputs/`): Private — stored on upload, read by queue job as base64, cleaned up after 24h
+- **Outputs** (`ai-tools/outputs/{id}/`): Public — served via `CLOUDFLARE_R2_URL`, cleaned up after 24h
+- **Disk name**: `r2` (configured in `config/filesystems.php`)
+- **Used by**: `GenerationService` (store input), `RunAIToolJob` (read input, store output via `ReplicateService`), `CleanupOldGenerationsCommand` (delete both), `AIGeneration::outputImageUrl()` (public URL)
 
 ### UI Design Pattern (Tool Pages)
 
