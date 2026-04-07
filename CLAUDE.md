@@ -365,10 +365,10 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Stack**: Kotlin Multiplatform + Compose Multiplatform (Android + iOS)
 - **Architecture**: Clean Architecture (Presentation → Domain → Data) with MVVM per screen
 - **DI**: Koin 4.x
-- **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints with `X-Api-Key` header)
+- **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints with `X-Api-Key` header) + `ktor-client-auth` for automatic Sanctum token refresh
 - **API Config**: `BuildConfig.ARCHGEE_API_BASE_URL` + `BuildConfig.ARCHGEE_API_KEY` (set in `local.properties`)
 - **Database**: Room (cross-platform via BundledSQLiteDriver, current version: 4, destructive migration)
-- **Auth**: Firebase Auth (anonymous + Google/Apple OAuth) → Sanctum bridge via `POST /api/v1/auth/firebase`
+- **Auth**: Firebase Auth (anonymous + Google/Apple OAuth) → Sanctum bridge via `POST /api/v1/auth/firebase`. Ktor Auth plugin auto-refreshes expired Sanctum tokens by re-exchanging Firebase ID token — users never see 401 errors
 - **Monetization**: RevenueCat (subscriptions: free 4 swipes/day, premium unlimited; credits: consumable IAP for AI tools)
 - **Navigation**: Jetpack Navigation Compose with `@Serializable` type-safe routes
 - **Design System**: Separate `designsystem/` module with 40+ reusable composables
@@ -384,6 +384,46 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Request DTOs**: Must have `Request` suffix, use `@Serializable` + `@SerialName`
 - **Coroutines**: Inject dispatchers, use `BackgroundExecutor` for IO, avoid `GlobalScope`
 - **No pass-through use cases**: Call repositories directly from ViewModels unless orchestration needed
+- **API error handling**: Always check `response.status.isSuccess()` before calling `.body()` — non-2xx responses (401, 402, etc.) must be handled first, parse `ErrorResponse` for message, then throw. See `RealCreditApiService.addCredits()` as reference pattern
+
+### Mobile Design System Rules
+
+The `designsystem/` module contains all reusable UI components. **Always use design system components instead of raw Material3 equivalents** in presentation screens:
+
+| Instead of (raw Material3) | Use (design system) |
+|---------------------------|---------------------|
+| `Button` | `AppButton(style = PRIMARY)` |
+| `OutlinedButton` | `AppButton(style = ALTERNATIVE)` |
+| `TextButton` | `AppButton(style = TEXT)` |
+| `TextButton` (destructive/delete) | `AppButton(style = DESTRUCTIVE)` |
+| `Card` / `CardDefaults` | `AppCardContainer` |
+| `CircularProgressIndicator` (standalone) | `LoadingProgress()` or `LoadingProgress(mode = CIRCULAR)` |
+| `CircularProgressIndicator` (in button) | `AppButton(isLoading = true)` |
+| Raw `Dialog` | `AppDialog` (info/error) or `AppModalBottomSheet` (content-heavy) |
+
+**Key design system components** (`designsystem/src/commonMain/kotlin/.../components/`):
+
+- **AppButton** — styles: `PRIMARY`, `ALTERNATIVE`, `TEXT`, `DESTRUCTIVE` (error-colored); sizes: `LARGE`/`MEDIUM`/`SMALL`/`EXTRA_SMALL`; supports `isLoading`, `startIcon`, `endIcon`
+- **AppCardContainer** — generic card with `shape`, `backgroundColor`, `onClick`, `contentPaddingValues`
+- **AppDialog** — types: `INFO`, `ERROR`; with title, body, confirm/dismiss buttons
+- **AppModalBottomSheet** — bottom sheet with title, content slot, optional buttons (`hideButtons = true` for close-icon mode)
+- **LoadingProgress** — modes: `CIRCULAR`, `OVERLAY`, `FULLSCREEN`
+- **EmptyContentView** — empty state with animated illustration, title, text, optional action button
+- **AppToolbar** — top app bar with navigation icon, title, actions
+- **Chip** — styles: `FILLED`/`SECONDARY`/`OUTLINE`/etc., sizes: `LARGE`/`MEDIUM`/`SMALL`
+- **UserInput** — custom text field (for simple inputs; use `OutlinedTextField` when labels/supportingText/dropdowns are needed)
+- **CircularActionButton** — circular icon button with optional label text
+- **MenuBottomSheet** — menu-style bottom sheet with grouped items
+- **ShimmerBox** — animated shimmer placeholder for loading images/content; use with `SubcomposeAsyncImage(loading = { ShimmerBox(...) })`
+
+**UX rules for modals:**
+- `ModalBottomSheet` renders above the Scaffold — Snackbar/toast from `AppGlobalUiState` will be hidden behind it. Dismiss the sheet before showing toast messages (set `selectedItem = null` before calling `showUiMessage`)
+- Images inside `AppModalBottomSheet` must have `heightIn(max = 400.dp)` to prevent tall images from pushing buttons off-screen
+
+**Exceptions** (OK to use raw Material3):
+- `OutlinedTextField` with labels/supportingText — `UserInput` doesn't support these
+- `ExposedDropdownMenuBox` — no design system equivalent
+- Inline small indicators inside custom layouts where `LoadingProgress` is too large
 
 ### Build Commands
 
