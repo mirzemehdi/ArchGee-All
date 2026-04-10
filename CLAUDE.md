@@ -296,6 +296,18 @@ GET  /api/v1/categories        # Categories with job counts
 POST /api/v1/auth/firebase     # Exchange Firebase ID token for Sanctum token (creates/finds user)
 ```
 
+**Identity resolution** in `AuthController::firebaseExchange`:
+
+1. Look up existing user by `firebase_uid` (stable across anonymous → Google/Apple linking).
+2. Fall back to email lookup — handles users who signed up on web with the same Google account.
+3. If both lookups return different records (anonymous mobile user just linked a Google email that already owns a separate web account), `UserMergeService` merges them in a transaction: credit balances are summed, owned rows across 13 tables (credit_transactions, ai_generations, saved_jobs, etc.) are reassigned, tokens are revoked, and the source user is deleted. Same email = same account, always.
+4. Otherwise create a new user.
+
+Key files:
+- `app/Services/UserMergeService.php` — merge logic, table reassignment, pivot conflict handling
+- `users.firebase_uid` — nullable unique indexed column (migration: `2026_04_10_120000_add_firebase_uid_to_users_table.php`)
+- `ToolController::verifyPurchaseWithRevenueCat()` reads `$user->firebase_uid` directly (RevenueCat customer ID is always the Firebase UID for mobile purchasers)
+
 ### Authenticated Endpoints (Sanctum)
 
 ```
@@ -500,7 +512,7 @@ These are critical — Filament 5 changed several property declarations from sta
 - **Category pages**: `/jobs/category/{slug}` — FAQ schema, `seo_content` column for unique intro (editable in Filament admin), top countries cross-links
 - **Country pages**: `/jobs/location/{country}` — FAQ schema, city chips, other-countries sidebar
 - **City pages**: `/jobs/location/{country}/{city}` — breadcrumbs linking to country page
-- **Country map**: 28 supported countries hardcoded in `JobsController::resolveCountryName()` — used for pSEO routing and display names
+- **Countries**: All ~248 ISO 3166-1 alpha-2 countries supported via `app/Constants/Countries.php`. Names come from PHP `intl` (`Locale::getDisplayRegion`), flags from Unicode regional-indicator pairs. No artificial whitelist — pSEO routes and the country filter dropdown work for any real ISO code. `JobsController::resolveCountryName()` delegates to `Countries::name()`.
 - **`seo_content`**: Nullable text column on `job_categories` table — admin-editable unique content per category to avoid thin pages
 
 ## UI Design System
