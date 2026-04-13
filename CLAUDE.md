@@ -380,7 +380,7 @@ Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 - **Networking**: Ktor 3.x (consumes Laravel `/api/v1/` endpoints with `X-Api-Key` header) + `ktor-client-auth` for automatic Sanctum token refresh
 - **API Config**: `BuildConfig.ARCHGEE_API_BASE_URL` + `BuildConfig.ARCHGEE_API_KEY` (set in `local.properties`)
 - **Database**: Room (cross-platform via BundledSQLiteDriver, current version: 4, destructive migration)
-- **Auth**: Firebase Auth (anonymous + Google/Apple OAuth) → Sanctum bridge via `POST /api/v1/auth/firebase`. Ktor Auth plugin auto-refreshes expired Sanctum tokens by re-exchanging Firebase ID token — users never see 401 errors
+- **Auth**: Firebase Auth (anonymous + Google/Apple OAuth) → Sanctum bridge via `POST /api/v1/auth/firebase`. Ktor Auth plugin auto-refreshes expired Sanctum tokens by re-exchanging Firebase ID token. **Global 401 interceptor** in `HttpClientFactory.default` (`HttpResponseValidator`) detects truly-logged-out 401s (no Firebase user + no Sanctum token) and fires `AppGlobalUiState.requireSignIn()` — `MainScreenRoute` observes this and routes to `SignInScreenRoute`. Sign-in screen has Google + Apple + **Continue as guest** (anonymous Firebase). Logout button on home menu wipes local data via `JobRepository.clearLocalData()` and routes back to sign-in.
 - **Monetization**: RevenueCat (subscriptions: free 4 swipes/day, premium unlimited; credits: consumable IAP for AI tools)
 - **Navigation**: Jetpack Navigation Compose with `@Serializable` type-safe routes
 - **Design System**: Separate `designsystem/` module with 40+ reusable composables
@@ -833,6 +833,137 @@ Custom CSS in `resources/css/styles.css` under `article.blog-post`:
 | `resources/css/styles.css` | Blog-specific CSS (tables, FAQ accordion) |
 | `resources/views/components/blog/post.blade.php` | Blog post detail template |
 | `resources/views/components/blog/post-card.blade.php` | Blog listing card template |
+
+## Medium Cross-Posting (semi-automated)
+
+Drip-fed daily reminder system for cross-posting ArchGee blog posts to Medium while preserving SEO via canonical URLs.
+
+### Why it's not fully automated
+
+**Medium no longer issues new API integration tokens.** There is no legitimate way to `POST /v1/users/{id}/posts` unless you already hold a legacy token. Browser automation and scraped backdoors are explicitly rejected as fragile/ToS-risky. Instead, we use Medium's official [Import a post](https://help.medium.com/hc/en-us/articles/214550207) tool (`medium.com/p/import`) which **automatically sets the canonical link to the source URL** on import — which is exactly what cross-post SEO needs. The only manual step is ~30 seconds to paste the URL and click Import.
+
+### Architecture
+
+```
+Scheduler (09:15 daily)  ──┐
+                           ├──> MediumCrossPostService.dispatchNextReminder()
+Filament button (manual) ──┘              │
+                                           ▼
+                              BlogPost::eligibleForMedium()->first()
+                                           │
+                                           ▼
+                       Mail::to($recipient)->send(MediumCrossPostReminderMail)
+                                           │
+                                           ▼
+                              Stamp medium_queued_at in DB transaction
+```
+
+Both triggers call the **same** `MediumCrossPostService` — scheduler and admin button share zero-duplication code paths.
+
+### Data model (`blog_posts` table)
+
+Migration `2026_04_10_000000_add_medium_columns_to_blog_posts_table.php` adds three nullable columns:
+
+- `medium_queued_at` — set when the reminder email is dispatched
+- `medium_published_at` — set when admin clicks the signed "mark as posted" link
+- `medium_url` — validated Medium URL (must be `medium.com` or `*.medium.com`)
+
+Also adds index `blog_posts_medium_eligible_idx` on `(is_published, medium_queued_at)`.
+
+**Side fix:** the `BlogPost` model had no `$casts` array, so `published_at` was returned as a raw string. This crashed `/blog/{slug}` with `Call to a member function toIso8601String() on string`. Added `published_at`, `medium_queued_at`, `medium_published_at` → `datetime`, and `is_published` → `boolean`.
+
+### Eligibility scope
+
+```php
+BlogPost::query()
+    ->where('is_published', true)
+    ->whereNotNull('published_at')
+    ->whereNull('medium_queued_at')   // not yet notified
+    ->orderBy('published_at');         // oldest first — natural backlog drain
+```
+
+Exposed as `BlogPost::scopeEligibleForMedium()`.
+
+### Signed "mark as posted" URL
+
+- Route: `blog.medium-posted` via `GET /admin/blog/{post}/medium-posted` with `signed` middleware
+- TTL: 14 days (`MediumCrossPostService::MARK_POSTED_LINK_TTL_DAYS`)
+- Optional `?medium_url=` query param — validated against `medium.com`/`*.medium.com` allowlist in `MediumCrossPostController::resolveMediumUrl()` (checks scheme, host, max length 500 chars)
+- Rejects non-Medium URLs silently (stores null) to prevent the column from being used as an open-redirect vector
+- Redirects to `filament.admin.resources.blog-posts.edit` on success
+
+### Filament admin integration
+
+`BlogPostResource`:
+- **"Medium" column** — badge showing `Not queued` / `Reminded` / `Published`
+- **"Medium Status" filter** — filter the list by one of those three states
+- **Bulk action "Re-queue to Medium"** — clears `medium_queued_at` + `medium_published_at` so posts get picked up on the next run (for when the admin never actually imported)
+- **Bulk action "Mark Medium posted"** — stamps both timestamps at `now()` (for historical backfill)
+- **Edit form section "Medium Cross-Post"** — shows status string + clickable Medium URL
+
+`ListBlogPosts` page:
+- **Header action "Run Medium drip now"** — confirmation dialog, then calls `MediumCrossPostService.dispatchNextReminder()` (same code path as the scheduler), shows a Filament notification with the title of the queued post
+
+### Configuration
+
+`config/services.php`:
+
+```php
+'medium' => [
+    'cross_post_recipient' => env('MEDIUM_CROSS_POST_RECIPIENT', env('ADMIN_EMAIL')),
+],
+```
+
+Env var fallback chain: `MEDIUM_CROSS_POST_RECIPIENT` → `ADMIN_EMAIL` → null (errors out with clear message).
+
+### Suggested Medium tags
+
+Generated by `MediumCrossPostService::buildSuggestedTags()`:
+
+1. Blog post's category name
+2. Always "Architecture" + "Careers" (brand/niche baseline)
+3. Up to 3 H2 headings parsed from the post's HTML body, truncated to 22 chars (Medium's 25-char cap)
+4. "FAQ" heading skipped
+5. Deduped, capped at Medium's 5-tag limit
+
+### Failure semantics
+
+- Mail dispatch fails → `medium_queued_at` **NOT** stamped → post stays eligible → picked up on next run
+- DB update wrapped in `DB::transaction()` so the stamp is atomic
+- Service throws `\RuntimeException` on missing recipient; CLI and Filament button both catch and surface the error
+
+### Commands
+
+```bash
+# Dry-run — show what would be sent, no DB writes, no mail
+./vendor/bin/sail artisan blog:cross-post-to-medium --dry-run
+
+# Real run — picks next eligible post, sends reminder, stamps queued_at
+./vendor/bin/sail artisan blog:cross-post-to-medium
+```
+
+Schedule: `Schedule::command('blog:cross-post-to-medium')->dailyAt('09:15')->withoutOverlapping()->onOneServer();`
+
+### Upgrade path if a Medium API token ever appears
+
+Add a `sendToMediumApi(BlogPost $post): string` method to `MediumCrossPostService` that POSTs to `https://api.medium.com/v1/users/{userId}/posts` with the post's markdown body + `canonicalUrl` field set to the ArchGee URL. Switch `dispatchNextReminder()` to call it instead of sending the email, and stamp `medium_published_at` directly. Command, scheduler, Filament button, and admin panel all continue working without changes.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `database/migrations/2026_04_10_000000_add_medium_columns_to_blog_posts_table.php` | Adds the three Medium columns + index |
+| `app/Services/MediumCrossPostService.php` | Single source of truth — `dispatchNextReminder()` + `previewNextReminder()` + tag builder |
+| `app/Console/Commands/CrossPostToMediumCommand.php` | Thin wrapper around the service, supports `--dry-run` |
+| `app/Mail/MediumCrossPostReminderMail.php` | Queued mailable |
+| `resources/views/emails/blog/medium-cross-post-reminder.blade.php` | 3-step email template |
+| `app/Http/Controllers/MediumCrossPostController.php` | `markPosted()` handler with Medium-hostname validation |
+| `app/Models/BlogPost.php` | `scopeEligibleForMedium()` + datetime casts |
+| `app/Filament/Admin/Resources/BlogPosts/BlogPostResource.php` | Column, filter, bulk actions, form section |
+| `app/Filament/Admin/Resources/BlogPosts/Pages/ListBlogPosts.php` | "Run Medium drip now" header action |
+| `routes/console.php` | Daily scheduler entry |
+| `routes/web.php` | Signed route |
+| `config/services.php` | `services.medium.cross_post_recipient` |
 
 ## Important References
 
