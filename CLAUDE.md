@@ -20,7 +20,6 @@ ArchGee-All/                          # Root (git repo)
 │   ├── designsystem/                 # Reusable UI component library (40+ composables)
 │   ├── iosApp/                       # Xcode wrapper for iOS
 │   └── distribution/                 # Release assets (keystore, release notes)
-├── python-scraper/                   # Python 3.12+ job scraper
 ├── AIGuidelines/                     # Product & technical documentation
 │   ├── prd.md                        # Product Requirements Document
 │   ├── db_schema.md                  # Database schema spec
@@ -48,7 +47,7 @@ ArchGee-All/                          # Root (git repo)
 | **Auth** | Laravel Sanctum, Socialite, Filament Breezy |
 | **AI** | OpenAI (gpt-4o-mini) / Anthropic / Mistral for job enrichment |
 | **Assets** | Vite 7 |
-| **Scraper** | Python 3.12+, httpx, Pydantic, Click CLI |
+| **Job ingestion** | Laravel fetch services + `jobs:fetch-*` commands (Adzuna/Reed/Careerjet/Jooble) |
 | **Mobile App** | Kotlin Multiplatform, Compose Multiplatform, Ktor, Koin, Room |
 | **Boilerplate** | SaaSykit (subscriptions, payments, blog, roadmap) |
 
@@ -82,9 +81,11 @@ All commands run from `ArchGee-Website/` using Laravel Sail:
 vendor/bin/phpstan analyse                       # Static analysis (level 3)
 vendor/bin/pint                                  # Code formatter (PSR-12)
 
-# Python scraper (from python-scraper/)
-python main.py --all                             # Fetch all sources
-python main.py --source adzuna --country gb,us   # Specific source/country
+# Job source fetching (all ingestion is Laravel-side; scheduled every 6h)
+./vendor/bin/sail artisan jobs:fetch-adzuna --all-countries
+./vendor/bin/sail artisan jobs:fetch-reed
+./vendor/bin/sail artisan jobs:fetch-careerjet --all-locales
+./vendor/bin/sail artisan jobs:fetch-jooble --all-countries
 ```
 
 ## Deployment (Production — Docker + Dokploy)
@@ -360,15 +361,15 @@ POST /jobs/{slug}/apply              # Track application click
 
 Indeed, LinkedIn, Glassdoor, Google Jobs, JobSpy library — all prohibited.
 
-## Python Scraper (python-scraper/)
+## Job Ingestion (Laravel-side)
 
-- **Architecture**: Adapter pattern per source, Pydantic validation, httpx client
-- **Adapters**: `adzuna.py`, `careerjet.py`, `jooble.py` (in `adapters/`)
-- **Dedup**: Local SQLite cache (title+company+location hash, 30-day expiry) + server-side dedup
-- **Keyword filters**: 56 include keywords (architect, BIM, CAD...), 35 exclude keywords (software architect, DevOps...)
-- **Batch size**: 50 jobs per API call to Laravel
-- **Schedule**: Every 6 hours (`python main.py --all`)
-- **Config**: `.env` with `ARCHGEE_API_URL`, `ARCHGEE_API_TOKEN`, source API keys
+All job ingestion runs inside Laravel — there is **no Python scraper** (the old `python-scraper/` was orphaned and removed; it was never wired into any container/cron).
+
+- **Fetchers**: `AdzunaFetchService`, `ReedFetchService`, `CareerjetFetchService`, `JoobleFetchService` (+ matching `jobs:fetch-*` commands)
+- **Schedule**: All 4 commands run every 6h via `routes/console.php` (scheduler container in `docker-compose.prod.yml`)
+- **Pipeline**: fetch → `JobService::isDuplicate()` → `JobService::isExcludedTitle()` (drops software/naval/etc. "architect" false positives) → `createFromIngest()` → `EnrichJobWithAi` (AI relevance + salary + work-type + seniority)
+- **Field mapping**: `createFromIngest()` persists country/city/salary_min/max/currency/period/remote_type; `parsePostedAt()` defensively handles source date formats (e.g. Reed's UK `d/m/Y`)
+- **Careerjet caveat**: v4 API keys are IP-bound — the calling server IP must be whitelisted in the Careerjet partner dashboard, else 403
 
 ## Mobile App (ArchGee-MobileApp/)
 
@@ -658,9 +659,6 @@ vendor/bin/phpstan analyse    # Level 3
 
 # Code formatting
 vendor/bin/pint
-
-# Python scraper tests
-cd python-scraper && python -m pytest
 ```
 
 ## Common Gotchas — Alpine.js + Livewire
